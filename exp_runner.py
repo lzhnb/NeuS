@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from models.dataset import Dataset
 from models.fields import NeRF, RenderingNetwork, SDFNetwork, SingleVarianceNetwork
-from models.renderer import NeuSRenderer
+from models.renderer import NeuS
 
 
 class Runner:
@@ -55,27 +55,12 @@ class Runner:
         self.writer = None
 
         # Networks
-        params_to_train = []
-        self.nerf_outside = NeRF(**self.conf.model.nerf).to(self.device)
-        self.sdf_network = SDFNetwork(**self.conf.model.sdf_network).to(self.device)
-        self.deviation_network = SingleVarianceNetwork(**self.conf.model.variance_network).to(
-            self.device
-        )
-        self.color_network = RenderingNetwork(**self.conf.model.rendering_network).to(self.device)
-        params_to_train += list(self.nerf_outside.parameters())
-        params_to_train += list(self.sdf_network.parameters())
-        params_to_train += list(self.deviation_network.parameters())
-        params_to_train += list(self.color_network.parameters())
-
-        self.optimizer = torch.optim.Adam(params_to_train, lr=self.learning_rate)
-
-        self.renderer = NeuSRenderer(
-            self.nerf_outside,
-            self.sdf_network,
-            self.deviation_network,
-            self.color_network,
+        self.renderer = NeuS(
+            self.conf,
+            self.device,
             **self.conf.model.neus_renderer
         )
+        self.optimizer = torch.optim.Adam(self.renderer.parameters(), lr=self.learning_rate)
 
         # Load checkpoint
         latest_model_name = None
@@ -229,10 +214,7 @@ class Runner:
             os.path.join(self.base_exp_dir, "checkpoints", checkpoint_name),
             map_location=self.device,
         )
-        self.nerf_outside.load_state_dict(checkpoint["nerf"])
-        self.sdf_network.load_state_dict(checkpoint["sdf_network_fine"])
-        self.deviation_network.load_state_dict(checkpoint["variance_network_fine"])
-        self.color_network.load_state_dict(checkpoint["color_network_fine"])
+        self.renderer.load_state_dict(checkpoint["neus"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.iter_step = checkpoint["iter_step"]
 
@@ -240,10 +222,7 @@ class Runner:
 
     def save_checkpoint(self):
         checkpoint = {
-            "nerf": self.nerf_outside.state_dict(),
-            "sdf_network_fine": self.sdf_network.state_dict(),
-            "variance_network_fine": self.deviation_network.state_dict(),
-            "color_network_fine": self.color_network.state_dict(),
+            "neus": self.renderer.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "iter_step": self.iter_step,
         }

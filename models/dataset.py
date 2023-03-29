@@ -1,5 +1,6 @@
 import os
 from glob import glob
+from typing import Tuple
 
 import cv2 as cv
 import numpy as np
@@ -10,7 +11,7 @@ from scipy.spatial.transform import Slerp
 
 
 # This function is borrowed from IDR: https://github.com/lioryariv/idr
-def load_K_Rt_from_P(filename, P=None):
+def load_K_Rt_from_P(filename: str, P=None) -> Tuple[np.ndarray]:
     if P is None:
         lines = open(filename).read().splitlines()
         if len(lines) == 4:

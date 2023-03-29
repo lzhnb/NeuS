@@ -1,8 +1,11 @@
 import mcubes
 import numpy as np
+import omegaconf
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
+from .fields import NeRF, RenderingNetwork, SDFNetwork, SingleVarianceNetwork
 
 def extract_fields(bound_min, bound_max, resolution, query_func):
     N = 64
@@ -72,23 +75,22 @@ def sample_pdf(bins, weights, n_samples, det=False):
     return samples
 
 
-class NeuSRenderer:
+class NeuS(nn.Module):
     def __init__(
         self,
-        nerf,
-        sdf_network,
-        deviation_network,
-        color_network,
-        n_samples,
-        n_importance,
-        n_outside,
-        up_sample_steps,
-        perturb,
+        conf: omegaconf.OmegaConf,
+        device: torch.device,
+        n_samples: int,
+        n_importance: int,
+        n_outside: int,
+        up_sample_steps: int,
+        perturb: bool,
     ):
-        self.nerf = nerf
-        self.sdf_network = sdf_network
-        self.deviation_network = deviation_network
-        self.color_network = color_network
+        super(NeuS, self).__init__()
+        self.nerf = NeRF(**conf.model.nerf).to(device)
+        self.sdf_network = SDFNetwork(**conf.model.sdf_network).to(device)
+        self.color_network = RenderingNetwork(**conf.model.rendering_network).to(device)
+        self.deviation_network = SingleVarianceNetwork(**conf.model.variance_network).to(device)
         self.n_samples = n_samples
         self.n_importance = n_importance
         self.n_outside = n_outside
