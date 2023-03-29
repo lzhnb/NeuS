@@ -44,8 +44,6 @@ pip install -r requirements.txt
   - opencv_python==4.5.2.52
   - trimesh==3.9.8 
   - numpy==1.19.2
-  - pyhocon==0.3.57
-  - icecream==2.1.0
   - tqdm==4.50.2
   - scipy==1.7.0
   - PyMCubes==0.1.2

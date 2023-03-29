@@ -1,24 +1,27 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+
 from models.embedder import get_embedder
 
 
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
 class SDFNetwork(nn.Module):
-    def __init__(self,
-                 d_in,
-                 d_out,
-                 d_hidden,
-                 n_layers,
-                 skip_in=(4,),
-                 multires=0,
-                 bias=0.5,
-                 scale=1,
-                 geometric_init=True,
-                 weight_norm=True,
-                 inside_outside=False):
+    def __init__(
+        self,
+        d_in,
+        d_out,
+        d_hidden,
+        n_layers,
+        skip_in=(4,),
+        multires=0,
+        bias=0.5,
+        scale=1,
+        geometric_init=True,
+        weight_norm=True,
+        inside_outside=False,
+    ):
         super(SDFNetwork, self).__init__()
 
         dims = [d_in] + [d_hidden for _ in range(n_layers)] + [d_out]
@@ -45,10 +48,14 @@ class SDFNetwork(nn.Module):
             if geometric_init:
                 if l == self.num_layers - 2:
                     if not inside_outside:
-                        torch.nn.init.normal_(lin.weight, mean=np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001)
+                        torch.nn.init.normal_(
+                            lin.weight, mean=np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001
+                        )
                         torch.nn.init.constant_(lin.bias, -bias)
                     else:
-                        torch.nn.init.normal_(lin.weight, mean=-np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001)
+                        torch.nn.init.normal_(
+                            lin.weight, mean=-np.sqrt(np.pi) / np.sqrt(dims[l]), std=0.0001
+                        )
                         torch.nn.init.constant_(lin.bias, bias)
                 elif multires > 0 and l == 0:
                     torch.nn.init.constant_(lin.bias, 0.0)
@@ -57,7 +64,7 @@ class SDFNetwork(nn.Module):
                 elif multires > 0 and l in self.skip_in:
                     torch.nn.init.constant_(lin.bias, 0.0)
                     torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
-                    torch.nn.init.constant_(lin.weight[:, -(dims[0] - 3):], 0.0)
+                    torch.nn.init.constant_(lin.weight[:, -(dims[0] - 3) :], 0.0)
                 else:
                     torch.nn.init.constant_(lin.bias, 0.0)
                     torch.nn.init.normal_(lin.weight, 0.0, np.sqrt(2) / np.sqrt(out_dim))
@@ -103,22 +110,25 @@ class SDFNetwork(nn.Module):
             grad_outputs=d_output,
             create_graph=True,
             retain_graph=True,
-            only_inputs=True)[0]
+            only_inputs=True,
+        )[0]
         return gradients.unsqueeze(1)
 
 
 # This implementation is borrowed from IDR: https://github.com/lioryariv/idr
 class RenderingNetwork(nn.Module):
-    def __init__(self,
-                 d_feature,
-                 mode,
-                 d_in,
-                 d_out,
-                 d_hidden,
-                 n_layers,
-                 weight_norm=True,
-                 multires_view=0,
-                 squeeze_out=True):
+    def __init__(
+        self,
+        d_feature,
+        mode,
+        d_in,
+        d_out,
+        d_hidden,
+        n_layers,
+        weight_norm=True,
+        multires_view=0,
+        squeeze_out=True,
+    ):
         super().__init__()
 
         self.mode = mode
@@ -129,7 +139,7 @@ class RenderingNetwork(nn.Module):
         if multires_view > 0:
             embedview_fn, input_ch = get_embedder(multires_view)
             self.embedview_fn = embedview_fn
-            dims[0] += (input_ch - 3)
+            dims[0] += input_ch - 3
 
         self.num_layers = len(dims)
 
@@ -150,11 +160,11 @@ class RenderingNetwork(nn.Module):
 
         rendering_input = None
 
-        if self.mode == 'idr':
+        if self.mode == "idr":
             rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
-        elif self.mode == 'no_view_dir':
+        elif self.mode == "no_view_dir":
             rendering_input = torch.cat([points, normals, feature_vectors], dim=-1)
-        elif self.mode == 'no_normal':
+        elif self.mode == "no_normal":
             rendering_input = torch.cat([points, view_dirs, feature_vectors], dim=-1)
 
         x = rendering_input
@@ -174,16 +184,18 @@ class RenderingNetwork(nn.Module):
 
 # This implementation is borrowed from nerf-pytorch: https://github.com/yenchenlin/nerf-pytorch
 class NeRF(nn.Module):
-    def __init__(self,
-                 D=8,
-                 W=256,
-                 d_in=3,
-                 d_in_view=3,
-                 multires=0,
-                 multires_view=0,
-                 output_ch=4,
-                 skips=[4],
-                 use_viewdirs=False):
+    def __init__(
+        self,
+        D=8,
+        W=256,
+        d_in=3,
+        d_in_view=3,
+        multires=0,
+        multires_view=0,
+        output_ch=4,
+        skips=[4],
+        use_viewdirs=False,
+    ):
         super(NeRF, self).__init__()
         self.D = D
         self.W = W
@@ -208,8 +220,12 @@ class NeRF(nn.Module):
         self.use_viewdirs = use_viewdirs
 
         self.pts_linears = nn.ModuleList(
-            [nn.Linear(self.input_ch, W)] +
-            [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + self.input_ch, W) for i in range(D - 1)])
+            [nn.Linear(self.input_ch, W)]
+            + [
+                nn.Linear(W, W) if i not in self.skips else nn.Linear(W + self.input_ch, W)
+                for i in range(D - 1)
+            ]
+        )
 
         ### Implementation according to the official code release
         ### (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
@@ -257,7 +273,7 @@ class NeRF(nn.Module):
 class SingleVarianceNetwork(nn.Module):
     def __init__(self, init_val):
         super(SingleVarianceNetwork, self).__init__()
-        self.register_parameter('variance', nn.Parameter(torch.tensor(init_val)))
+        self.register_parameter("variance", nn.Parameter(torch.tensor(init_val)))
 
     def forward(self, x):
         return torch.ones([len(x), 1]) * torch.exp(self.variance * 10.0)
