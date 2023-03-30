@@ -1,6 +1,6 @@
 import os
 from glob import glob
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2 as cv
 import numpy as np
@@ -11,7 +11,7 @@ from scipy.spatial.transform import Slerp
 
 
 # This function is borrowed from IDR: https://github.com/lioryariv/idr
-def load_K_Rt_from_P(filename: str, P=None) -> Tuple[np.ndarray]:
+def load_K_Rt_from_P(filename: str, P: Optional[np.ndarray] = None) -> Tuple[np.ndarray]:
     if P is None:
         lines = open(filename).read().splitlines()
         if len(lines) == 4:
@@ -36,7 +36,7 @@ def load_K_Rt_from_P(filename: str, P=None) -> Tuple[np.ndarray]:
 
 
 class Dataset:
-    def __init__(self, conf: omegaconf.OmegaConf):
+    def __init__(self, conf: omegaconf.OmegaConf) -> None:
         super(Dataset, self).__init__()
         print("Load data: Begin")
         self.device = torch.device("cuda")
@@ -107,7 +107,9 @@ class Dataset:
 
         print("Load data: End")
 
-    def gen_rays_at(self, img_idx, resolution_level=1):
+    def gen_rays_at(
+        self, img_idx: int, resolution_level: int = 1
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Generate rays at world space from one camera.
         """
@@ -126,7 +128,7 @@ class Dataset:
         rays_o = self.pose_all[img_idx, None, None, :3, 3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
-    def gen_random_rays_at(self, img_idx, batch_size):
+    def gen_random_rays_at(self, img_idx: int, batch_size: int) -> torch.Tensor:
         """
         Generate random rays at world space from one camera.
         """
@@ -149,7 +151,9 @@ class Dataset:
             [rays_o.cpu(), rays_v.cpu(), color, mask[:, :1]], dim=-1
         ).cuda()  # batch_size, 10
 
-    def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
+    def gen_rays_between(
+        self, idx_0: int, idx_1: int, ratio: float, resolution_level: int = 1
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Interpolate pose between two cameras.
         """
@@ -184,7 +188,9 @@ class Dataset:
         rays_o = trans[None, None, :3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
-    def near_far_from_sphere(self, rays_o, rays_d):
+    def near_far_from_sphere(
+        self, rays_o: torch.Tensor, rays_d: torch.Tensor
+    ) -> Tuple[float, float]:
         a = torch.sum(rays_d**2, dim=-1, keepdim=True)
         b = 2.0 * torch.sum(rays_o * rays_d, dim=-1, keepdim=True)
         mid = 0.5 * (-b) / a
@@ -192,7 +198,7 @@ class Dataset:
         far = mid + 1.0
         return near, far
 
-    def image_at(self, idx, resolution_level):
+    def image_at(self, idx: int, resolution_level: int) -> np.ndarray:
         img = cv.imread(self.images_lis[idx])
         return (cv.resize(img, (self.W // resolution_level, self.H // resolution_level))).clip(
             0, 255

@@ -11,9 +11,9 @@ from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from utils.backup import backup
 from models.dataset import Dataset
 from models.renderer import NeuS
+from utils.backup import backup
 
 
 class Runner:
@@ -81,9 +81,13 @@ class Runner:
 
         # Backup codes and configs for debug
         if self.mode[:5] == "train":
-            self.file_backup()
+            backup(
+                backup_dir=os.path.join(self.exp_dir, "backup"),
+                backup_list=["models", "utils", self.conf_path, __file__],
+                contain_suffix=["*.py", "*.hpp", "*.cuh", "*.cpp", "*.cu"],
+            )
 
-    def train(self):
+    def train(self) -> NotImplemented:
         self.writer = SummaryWriter(log_dir=os.path.join(self.exp_dir, "logs"))
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
@@ -178,16 +182,16 @@ class Runner:
             if self.iter_step % len(image_perm) == 0:
                 image_perm = self.get_image_perm()
 
-    def get_image_perm(self):
+    def get_image_perm(self) -> torch.Tensor:
         return torch.randperm(self.dataset.n_images)
 
-    def get_cos_anneal_ratio(self):
+    def get_cos_anneal_ratio(self) -> float:
         if self.anneal_end == 0.0:
             return 1.0
         else:
             return np.min([1.0, self.iter_step / self.anneal_end])
 
-    def update_learning_rate(self):
+    def update_learning_rate(self) -> None:
         if self.iter_step < self.warm_up_end:
             learning_factor = self.iter_step / self.warm_up_end
         else:
@@ -198,14 +202,7 @@ class Runner:
         for g in self.optimizer.param_groups:
             g["lr"] = self.learning_rate * learning_factor
 
-    def file_backup(self):
-        backup(
-            backup_dir=os.path.join(self.exp_dir, "backup"),
-            backup_list=["models", "utils", self.conf_path, __file__],
-            contain_suffix=["*.py", "*.hpp", "*.cuh", "*.cpp", "*.cu"],
-        )
-
-    def load_checkpoint(self, checkpoint_name):
+    def load_checkpoint(self, checkpoint_name: str) -> None:
         checkpoint = torch.load(
             os.path.join(self.exp_dir, "checkpoints", checkpoint_name),
             map_location=self.device,
@@ -216,7 +213,7 @@ class Runner:
 
         logging.info("End")
 
-    def save_checkpoint(self):
+    def save_checkpoint(self) -> None:
         checkpoint = {
             "neus": self.renderer.state_dict(),
             "optimizer": self.optimizer.state_dict(),
@@ -229,7 +226,7 @@ class Runner:
             os.path.join(self.exp_dir, "checkpoints", "ckpt_{:0>6d}.pth".format(self.iter_step)),
         )
 
-    def validate_image(self, idx=-1, resolution_level=-1):
+    def validate_image(self, idx: int = -1, resolution_level: int = -1) -> None:
         if idx < 0:
             idx = np.random.randint(self.dataset.n_images)
 
@@ -315,7 +312,9 @@ class Runner:
                     normal_img[..., i],
                 )
 
-    def render_novel_image(self, idx_0, idx_1, ratio, resolution_level):
+    def render_novel_image(
+        self, idx_0: int, idx_1: int, ratio: float, resolution_level: int
+    ) -> np.ndarray:
         """
         Interpolate view between two cameras.
         """
@@ -351,7 +350,9 @@ class Runner:
         )
         return img_fine
 
-    def validate_mesh(self, world_space=False, resolution=64, threshold=0.0):
+    def validate_mesh(
+        self, world_space: bool = False, resolution: int = 64, threshold: float = 0.0
+    ) -> None:
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=torch.float32)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=torch.float32)
 
@@ -371,7 +372,7 @@ class Runner:
 
         logging.info("End")
 
-    def interpolate_view(self, img_idx_0, img_idx_1):
+    def interpolate_view(self, img_idx_0: int, img_idx_1: int) -> None:
         images = []
         n_frames = 60
         for i in range(n_frames):

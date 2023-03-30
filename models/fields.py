@@ -1,3 +1,5 @@
+from typing import Sequence, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,18 +12,18 @@ from models.embedder import get_embedder
 class SDFNetwork(nn.Module):
     def __init__(
         self,
-        d_in,
-        d_out,
-        d_hidden,
-        n_layers,
-        skip_in=(4,),
-        multires=0,
-        bias=0.5,
-        scale=1,
-        geometric_init=True,
-        weight_norm=True,
-        inside_outside=False,
-    ):
+        d_in: int,
+        d_out: int,
+        d_hidden: int,
+        n_layers: int,
+        skip_in: Sequence[int] = (4,),
+        multires: int = 0,
+        bias: float = 0.5,
+        scale: float = 1,
+        geometric_init: bool = True,
+        weight_norm: bool = True,
+        inside_outside: bool = False,
+    ) -> None:
         super(SDFNetwork, self).__init__()
 
         dims = [d_in] + [d_hidden for _ in range(n_layers)] + [d_out]
@@ -76,7 +78,7 @@ class SDFNetwork(nn.Module):
 
         self.activation = nn.Softplus(beta=100)
 
-    def forward(self, inputs):
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         inputs = inputs * self.scale
         if self.embed_fn_fine is not None:
             inputs = self.embed_fn_fine(inputs)
@@ -94,13 +96,10 @@ class SDFNetwork(nn.Module):
                 x = self.activation(x)
         return torch.cat([x[:, :1] / self.scale, x[:, 1:]], dim=-1)
 
-    def sdf(self, x):
+    def sdf(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward(x)[:, :1]
 
-    def sdf_hidden_appearance(self, x):
-        return self.forward(x)
-
-    def gradient(self, x):
+    def gradient(self, x: torch.Tensor) -> torch.Tensor:
         x.requires_grad_(True)
         y = self.sdf(x)
         d_output = torch.ones_like(y, requires_grad=False, device=y.device)
@@ -119,16 +118,16 @@ class SDFNetwork(nn.Module):
 class RenderingNetwork(nn.Module):
     def __init__(
         self,
-        d_feature,
-        mode,
-        d_in,
-        d_out,
-        d_hidden,
-        n_layers,
-        weight_norm=True,
-        multires_view=0,
-        squeeze_out=True,
-    ):
+        mode: str,
+        d_feature: int,
+        d_in: int,
+        d_out: int,
+        d_hidden: int,
+        n_layers: int,
+        weight_norm: bool = True,
+        multires_view: int = 0,
+        squeeze_out: bool = True,
+    ) -> None:
         super().__init__()
 
         self.mode = mode
@@ -154,7 +153,13 @@ class RenderingNetwork(nn.Module):
 
         self.relu = nn.ReLU()
 
-    def forward(self, points, normals, view_dirs, feature_vectors):
+    def forward(
+        self,
+        points: torch.Tensor,
+        normals: torch.Tensor,
+        view_dirs: torch.Tensor,
+        feature_vectors: torch.Tensor,
+    ) -> torch.Tensor:
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
 
@@ -186,16 +191,16 @@ class RenderingNetwork(nn.Module):
 class NeRF(nn.Module):
     def __init__(
         self,
-        D=8,
-        W=256,
-        d_in=3,
-        d_in_view=3,
-        multires=0,
-        multires_view=0,
-        output_ch=4,
+        D: int = 8,
+        W: int = 256,
+        d_in: int = 3,
+        d_in_view: int = 3,
+        multires: int = 0,
+        multires_view: int = 0,
+        output_ch: int = 4,
         skips=[4],
         use_viewdirs=False,
-    ):
+    ) -> None:
         super(NeRF, self).__init__()
         self.D = D
         self.W = W
@@ -242,7 +247,9 @@ class NeRF(nn.Module):
         else:
             self.output_linear = nn.Linear(W, output_ch)
 
-    def forward(self, input_pts, input_views):
+    def forward(
+        self, input_pts: torch.Tensor, input_views: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.embed_fn is not None:
             input_pts = self.embed_fn(input_pts)
         if self.embed_fn_view is not None:
@@ -271,9 +278,9 @@ class NeRF(nn.Module):
 
 
 class SingleVarianceNetwork(nn.Module):
-    def __init__(self, init_val):
+    def __init__(self, init_val: float) -> None:
         super(SingleVarianceNetwork, self).__init__()
         self.register_parameter("variance", nn.Parameter(torch.tensor(init_val)))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.ones([len(x), 1]) * torch.exp(self.variance * 10.0)

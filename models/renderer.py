@@ -1,13 +1,19 @@
+from typing import Callable, Dict, Optional, Tuple
+
 import mcubes
 import numpy as np
 import omegaconf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from nerfacc import ContractionType, OccupancyGrid, ray_marching, rendering
 
 from .fields import NeRF, RenderingNetwork, SDFNetwork, SingleVarianceNetwork
 
-def extract_fields(bound_min, bound_max, resolution, query_func):
+
+def extract_fields(
+    bound_min: torch.Tensor, bound_max: torch.Tensor, resolution: int, query_func: Callable
+) -> np.ndarray:
     N = 64
     X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
     Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)
@@ -31,7 +37,13 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
     return u
 
 
-def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
+def extract_geometry(
+    bound_min: torch.Tensor,
+    bound_max: torch.Tensor,
+    resolution: int,
+    threshold: float,
+    query_func: Callable,
+) -> Tuple[np.ndarray, np.ndarray]:
     print("threshold: {}".format(threshold))
     u = extract_fields(bound_min, bound_max, resolution, query_func)
     vertices, triangles = mcubes.marching_cubes(u, threshold)
@@ -42,7 +54,9 @@ def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
     return vertices, triangles
 
 
-def sample_pdf(bins, weights, n_samples, det=False):
+def sample_pdf(
+    bins: torch.Tensor, weights: torch.Tensor, n_samples: int, det: bool = False
+) -> torch.Tensor:
     # This implementation is from NeRF
     # Get pdf
     weights = weights + 1e-5  # prevent nans
@@ -97,7 +111,14 @@ class NeuS(nn.Module):
         self.up_sample_steps = up_sample_steps
         self.perturb = perturb
 
-    def render_core_outside(self, rays_o, rays_d, z_vals, sample_dist, nerf, background_rgb=None):
+    def render_core_outside(
+        self,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        z_vals: torch.Tensor,
+        sample_dist: float,
+        background_rgb: Optional[torch.Tensor] = None,
+    ) -> Dict:
         """
         Render background
         """
@@ -123,7 +144,7 @@ class NeuS(nn.Module):
         pts = pts.reshape(-1, 3 + int(self.n_outside > 0))
         dirs = dirs.reshape(-1, 3)
 
-        density, sampled_color = nerf(pts, dirs)
+        density, sampled_color = self.nerf(pts, dirs)
         sampled_color = torch.sigmoid(sampled_color)
         alpha = 1.0 - torch.exp(-F.softplus(density.reshape(batch_size, n_samples)) * dists)
         alpha = alpha.reshape(batch_size, n_samples)
@@ -145,7 +166,15 @@ class NeuS(nn.Module):
             "weights": weights,
         }
 
-    def up_sample(self, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
+    def up_sample(
+        self,
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        z_vals: torch.Tensor,
+        sdf: torch.Tensor,
+        n_importance: int,
+        inv_s: float,
+    ) -> torch.Tensor:
         """
         Up sampling give a fixed inv_s
         """
@@ -217,18 +246,15 @@ class NeuS(nn.Module):
 
     def render_core(
         self,
-        rays_o,
-        rays_d,
-        z_vals,
-        sample_dist,
-        sdf_network,
-        deviation_network,
-        color_network,
-        background_alpha=None,
-        background_sampled_color=None,
-        background_rgb=None,
-        cos_anneal_ratio=0.0,
-    ):
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        z_vals: torch.Tensor,
+        sample_dist: float,
+        background_alpha: Optional[torch.Tensor] = None,
+        background_sampled_color: Optional[torch.Tensor] = None,
+        background_rgb: Optional[torch.Tensor] = None,
+        cos_anneal_ratio: float = 0.0,
+    ) -> Dict:
         batch_size, n_samples = z_vals.shape
 
         # Section length
@@ -245,16 +271,18 @@ class NeuS(nn.Module):
         pts = pts.reshape(-1, 3)
         dirs = dirs.reshape(-1, 3)
 
-        sdf_nn_output = sdf_network(pts)
+        sdf_nn_output = self.sdf_network(pts)
         sdf = sdf_nn_output[:, :1]
         feature_vector = sdf_nn_output[:, 1:]
 
-        gradients = sdf_network.gradient(pts).squeeze()
-        sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(
+        gradients = self.sdf_network.gradient(pts).squeeze()
+        sampled_color = self.color_network(pts, gradients, dirs, feature_vector).reshape(
             batch_size, n_samples, 3
         )
 
-        inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)  # Single parameter
+        inv_s = self.deviation_network(torch.zeros([1, 3]))[:, :1].clip(
+            1e-6, 1e6
+        )  # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
 
         true_cos = (dirs * gradients).sum(-1, keepdim=True)
@@ -331,14 +359,14 @@ class NeuS(nn.Module):
 
     def render(
         self,
-        rays_o,
-        rays_d,
-        near,
-        far,
-        perturb_overwrite=-1,
-        background_rgb=None,
-        cos_anneal_ratio=0.0,
-    ):
+        rays_o: torch.Tensor,
+        rays_d: torch.Tensor,
+        near: float,
+        far: float,
+        perturb_overwrite: int = -1,
+        background_rgb: Optional[torch.Tensor] = None,
+        cos_anneal_ratio: float = 0.0,
+    ) -> Dict:
         batch_size = len(rays_o)
         sample_dist = 2.0 / self.n_samples  # Assuming the region of interest is a unit sphere
         z_vals = torch.linspace(0.0, 1.0, self.n_samples)
@@ -402,9 +430,7 @@ class NeuS(nn.Module):
         if self.n_outside > 0:
             z_vals_feed = torch.cat([z_vals, z_vals_outside], dim=-1)
             z_vals_feed, _ = torch.sort(z_vals_feed, dim=-1)
-            ret_outside = self.render_core_outside(
-                rays_o, rays_d, z_vals_feed, sample_dist, self.nerf
-            )
+            ret_outside = self.render_core_outside(rays_o, rays_d, z_vals_feed, sample_dist)
 
             background_sampled_color = ret_outside["sampled_color"]
             background_alpha = ret_outside["alpha"]
@@ -415,9 +441,6 @@ class NeuS(nn.Module):
             rays_d,
             z_vals,
             sample_dist,
-            self.sdf_network,
-            self.deviation_network,
-            self.color_network,
             background_rgb=background_rgb,
             background_alpha=background_alpha,
             background_sampled_color=background_sampled_color,
@@ -442,7 +465,13 @@ class NeuS(nn.Module):
             "inside_sphere": ret_fine["inside_sphere"],
         }
 
-    def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
+    def extract_geometry(
+        self,
+        bound_min: torch.Tensor,
+        bound_max: torch.Tensor,
+        resolution: int,
+        threshold: float = 0.0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         return extract_geometry(
             bound_min,
             bound_max,

@@ -1,7 +1,7 @@
 # Copyright (c) Zhihao Liang. All rights reserved.
+import glob
 import os
 import os.path as osp
-import glob
 import shutil
 import warnings
 from typing import List
