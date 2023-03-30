@@ -1,7 +1,6 @@
 import argparse
 import logging
 import os
-from shutil import copyfile
 
 import cv2 as cv
 import numpy as np
@@ -12,24 +11,31 @@ from omegaconf import OmegaConf
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from utils.backup import backup
 from models.dataset import Dataset
-from models.fields import NeRF, RenderingNetwork, SDFNetwork, SingleVarianceNetwork
 from models.renderer import NeuS
 
 
 class Runner:
-    def __init__(self, conf_path: str, mode="train", case="CASE_NAME", is_continue=False) -> None:
+    def __init__(
+        self,
+        conf_path: str,
+        exp_dir: str,
+        mode: str = "train",
+        case: str = "CASE_NAME",
+        is_continue: bool = False,
+    ) -> None:
         self.device = torch.device("cuda")
 
         # Configuration
         self.conf_path = conf_path
         self.conf = OmegaConf.load(conf_path)
         # replace CASE_NAME
-        self.conf.general.base_exp_dir = self.conf.general.base_exp_dir.replace("CASE_NAME", case)
         self.conf.dataset.data_dir = self.conf.dataset.data_dir.replace("CASE_NAME", case)
 
-        self.base_exp_dir = self.conf.general.base_exp_dir
-        os.makedirs(self.base_exp_dir, exist_ok=True)
+        # parse exp dir
+        self.exp_dir = os.path.join(exp_dir, case)
+        os.makedirs(self.exp_dir, exist_ok=True)
         self.dataset = Dataset(self.conf.dataset)
         self.iter_step = 0
 
@@ -55,17 +61,13 @@ class Runner:
         self.writer = None
 
         # Networks
-        self.renderer = NeuS(
-            self.conf,
-            self.device,
-            **self.conf.model.neus_renderer
-        )
+        self.renderer = NeuS(self.conf, self.device, **self.conf.model.neus_renderer)
         self.optimizer = torch.optim.Adam(self.renderer.parameters(), lr=self.learning_rate)
 
         # Load checkpoint
         latest_model_name = None
         if is_continue:
-            model_list_raw = os.listdir(os.path.join(self.base_exp_dir, "checkpoints"))
+            model_list_raw = os.listdir(os.path.join(self.exp_dir, "checkpoints"))
             model_list = []
             for model_name in model_list_raw:
                 if model_name[-3:] == "pth" and int(model_name[5:-4]) <= self.end_iter:
@@ -82,7 +84,7 @@ class Runner:
             self.file_backup()
 
     def train(self):
-        self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, "logs"))
+        self.writer = SummaryWriter(log_dir=os.path.join(self.exp_dir, "logs"))
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
         image_perm = self.get_image_perm()
@@ -155,7 +157,7 @@ class Runner:
             self.writer.add_scalar("Statistics/psnr", psnr, self.iter_step)
 
             if self.iter_step % self.report_freq == 0:
-                print(self.base_exp_dir)
+                print(self.exp_dir)
                 print(
                     "iter:{:8>d} loss = {} lr={}".format(
                         self.iter_step, loss, self.optimizer.param_groups[0]["lr"]
@@ -197,21 +199,15 @@ class Runner:
             g["lr"] = self.learning_rate * learning_factor
 
     def file_backup(self):
-        dir_lis = self.conf.general.recording
-        os.makedirs(os.path.join(self.base_exp_dir, "recording"), exist_ok=True)
-        for dir_name in dir_lis:
-            cur_dir = os.path.join(self.base_exp_dir, "recording", dir_name)
-            os.makedirs(cur_dir, exist_ok=True)
-            files = os.listdir(dir_name)
-            for f_name in files:
-                if f_name[-3:] == ".py":
-                    copyfile(os.path.join(dir_name, f_name), os.path.join(cur_dir, f_name))
-
-        copyfile(self.conf_path, os.path.join(self.base_exp_dir, "recording", "config.conf"))
+        backup(
+            backup_dir=os.path.join(self.exp_dir, "backup"),
+            backup_list=["models", "utils", self.conf_path, __file__],
+            contain_suffix=["*.py", "*.hpp", "*.cuh", "*.cpp", "*.cu"],
+        )
 
     def load_checkpoint(self, checkpoint_name):
         checkpoint = torch.load(
-            os.path.join(self.base_exp_dir, "checkpoints", checkpoint_name),
+            os.path.join(self.exp_dir, "checkpoints", checkpoint_name),
             map_location=self.device,
         )
         self.renderer.load_state_dict(checkpoint["neus"])
@@ -227,12 +223,10 @@ class Runner:
             "iter_step": self.iter_step,
         }
 
-        os.makedirs(os.path.join(self.base_exp_dir, "checkpoints"), exist_ok=True)
+        os.makedirs(os.path.join(self.exp_dir, "checkpoints"), exist_ok=True)
         torch.save(
             checkpoint,
-            os.path.join(
-                self.base_exp_dir, "checkpoints", "ckpt_{:0>6d}.pth".format(self.iter_step)
-            ),
+            os.path.join(self.exp_dir, "checkpoints", "ckpt_{:0>6d}.pth".format(self.iter_step)),
         )
 
     def validate_image(self, idx=-1, resolution_level=-1):
@@ -293,14 +287,14 @@ class Runner:
                 + 128
             ).clip(0, 255)
 
-        os.makedirs(os.path.join(self.base_exp_dir, "validations_fine"), exist_ok=True)
-        os.makedirs(os.path.join(self.base_exp_dir, "normals"), exist_ok=True)
+        os.makedirs(os.path.join(self.exp_dir, "validations_fine"), exist_ok=True)
+        os.makedirs(os.path.join(self.exp_dir, "normals"), exist_ok=True)
 
         for i in range(img_fine.shape[-1]):
             if len(out_rgb_fine) > 0:
                 cv.imwrite(
                     os.path.join(
-                        self.base_exp_dir,
+                        self.exp_dir,
                         "validations_fine",
                         "{:0>8d}_{}_{}.png".format(self.iter_step, i, idx),
                     ),
@@ -314,7 +308,7 @@ class Runner:
             if len(out_normal_fine) > 0:
                 cv.imwrite(
                     os.path.join(
-                        self.base_exp_dir,
+                        self.exp_dir,
                         "normals",
                         "{:0>8d}_{}_{}.png".format(self.iter_step, i, idx),
                     ),
@@ -364,7 +358,7 @@ class Runner:
         vertices, triangles = self.renderer.extract_geometry(
             bound_min, bound_max, resolution=resolution, threshold=threshold
         )
-        os.makedirs(os.path.join(self.base_exp_dir, "meshes"), exist_ok=True)
+        os.makedirs(os.path.join(self.exp_dir, "meshes"), exist_ok=True)
 
         if world_space:
             vertices = (
@@ -373,7 +367,7 @@ class Runner:
             )
 
         mesh = trimesh.Trimesh(vertices, triangles)
-        mesh.export(os.path.join(self.base_exp_dir, "meshes", "{:0>8d}.ply".format(self.iter_step)))
+        mesh.export(os.path.join(self.exp_dir, "meshes", "{:0>8d}.ply".format(self.iter_step)))
 
         logging.info("End")
 
@@ -394,7 +388,7 @@ class Runner:
             images.append(images[n_frames - i - 1])
 
         fourcc = cv.VideoWriter_fourcc(*"mp4v")
-        video_dir = os.path.join(self.base_exp_dir, "render")
+        video_dir = os.path.join(self.exp_dir, "render")
         os.makedirs(video_dir, exist_ok=True)
         h, w, _ = images[0].shape
         writer = cv.VideoWriter(
@@ -421,17 +415,29 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=FORMAT)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--conf", type=str, default="./confs/base.conf")
-    parser.add_argument("--mode", type=str, default="train")
-    parser.add_argument("--mcube_threshold", type=float, default=0.0)
-    parser.add_argument("--is_continue", default=False, action="store_true")
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--case", type=str, default="")
+    parser.add_argument(
+        "--conf", type=str, default="./confs/base.conf", help="path to configuration file"
+    )
+    parser.add_argument(
+        "--exp_dir", type=str, default="./exp/default", help="directory to store experience results"
+    )
+    parser.add_argument("--case", type=str, help="target scene")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="train",
+        help="mode in ['train', 'validate_mesh', 'interpolate']",
+    )
+    parser.add_argument(
+        "--mcube_threshold", type=float, default=0.0, help="marching cubes threshold"
+    )
+    parser.add_argument(
+        "--is_continue", default=False, action="store_true", help="load previous checkpoint or not"
+    )
 
     args = parser.parse_args()
 
-    torch.cuda.set_device(args.gpu)
-    runner = Runner(args.conf, args.mode, args.case, args.is_continue)
+    runner = Runner(args.conf, args.exp_dir, args.mode, args.case, args.is_continue)
 
     if args.mode == "train":
         runner.train()
@@ -442,3 +448,5 @@ if __name__ == "__main__":
         img_idx_0 = int(img_idx_0)
         img_idx_1 = int(img_idx_1)
         runner.interpolate_view(img_idx_0, img_idx_1)
+    else:
+        raise ImportError()
